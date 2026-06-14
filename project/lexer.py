@@ -19,6 +19,14 @@ class TokenType(Enum):
     WHILE = auto()
     FUNCTION = auto()
     RETURN = auto()
+    BREAK = auto()
+    CONTINUE = auto()
+    SWITCH = auto()
+    CASE = auto()
+    DEFAULT = auto()
+    TYPEOF = auto()
+    OF = auto()
+    IN = auto()
     TRUE = auto()
     FALSE = auto()
     NULL = auto()
@@ -28,6 +36,7 @@ class TokenType(Enum):
     # Literals
     NUMBER = auto()
     STRING = auto()
+    TEMPLATE = auto()
 
     # Identifiers
     IDENTIFIER = auto()
@@ -72,6 +81,7 @@ class TokenType(Enum):
     COMMA = auto()
     SEMICOLON = auto()
     COLON = auto()
+    QUESTION = auto()
 
     # Special
     EOF = auto()
@@ -87,6 +97,14 @@ KEYWORDS = {
     "while": TokenType.WHILE,
     "function": TokenType.FUNCTION,
     "return": TokenType.RETURN,
+    "break": TokenType.BREAK,
+    "continue": TokenType.CONTINUE,
+    "switch": TokenType.SWITCH,
+    "case": TokenType.CASE,
+    "default": TokenType.DEFAULT,
+    "typeof": TokenType.TYPEOF,
+    "of": TokenType.OF,
+    "in": TokenType.IN,
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
     "null": TokenType.NULL,
@@ -178,6 +196,8 @@ class Lexer:
         # String literals
         if ch in ('"', "'"):
             return self._read_string(ch)
+        if ch == "`":
+            return self._read_template()
 
         # Numbers
         if ch.isdigit() or (ch == "." and self._peek(1).isdigit()):
@@ -245,6 +265,7 @@ class Lexer:
             ",": TokenType.COMMA,
             ";": TokenType.SEMICOLON,
             ":": TokenType.COLON,
+            "?": TokenType.QUESTION,
         }
         if ch in single_map:
             self._advance()
@@ -281,6 +302,34 @@ class Lexer:
                 chars.append(ch)
                 self._advance()
         raise LexerError("Unterminated string literal", start_line, start_col)
+
+    def _read_template(self) -> Token:
+        start_line = self.line
+        start_col = self.column
+        self._advance()  # opening backtick
+        chars = []
+        while self.pos < self.length:
+            ch = self._peek()
+            if ch == "`":
+                self._advance()
+                return Token(TokenType.TEMPLATE, "".join(chars), start_line, start_col)
+            if ch == "\\":
+                self._advance()
+                esc = self._peek()
+                escape_map = {
+                    "n": "\n",
+                    "t": "\t",
+                    "r": "\r",
+                    "`": "`",
+                    "\\": "\\",
+                    "$": "$",
+                }
+                chars.append(escape_map.get(esc, esc))
+                self._advance()
+            else:
+                chars.append(ch)
+                self._advance()
+        raise LexerError("Unterminated template literal", start_line, start_col)
 
     def _read_number(self) -> Token:
         start_line = self.line

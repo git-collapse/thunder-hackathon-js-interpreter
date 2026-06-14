@@ -33,3 +33,11 @@ class ReturnSignal(Exception):
 
     def __init__(self, value):
         self.value = value
+
+
+class BreakSignal(Exception):
+    """Internal control flow for break statements."""
+
+
+class ContinueSignal(Exception):
+    """Internal control flow for continue statements."""

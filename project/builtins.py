@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, List, TYPE_CHECKING
 
 from project.runtime import (
@@ -126,7 +126,9 @@ def array_forEach(interp, args, this_val):
     if not args:
         return UNDEFINED
     callback = args[0]
-    for i, item in enumerate(arr.elements):
+    length = len(arr.elements)
+    for i in range(length):
+        item = arr.elements[i] if i < len(arr.elements) else UNDEFINED
         interp.call_function(callback, [item, JSNumber(i), arr])
     return UNDEFINED
 
@@ -135,7 +137,9 @@ def array_map(interp, args, this_val):
     arr = _this_array(args, this_val)
     callback = args[0]
     result = []
-    for i, item in enumerate(arr.elements):
+    length = len(arr.elements)
+    for i in range(length):
+        item = arr.elements[i] if i < len(arr.elements) else UNDEFINED
         result.append(interp.call_function(callback, [item, JSNumber(i), arr]))
     return JSArray(result)
 
@@ -144,7 +148,9 @@ def array_filter(interp, args, this_val):
     arr = _this_array(args, this_val)
     callback = args[0]
     result = []
-    for i, item in enumerate(arr.elements):
+    length = len(arr.elements)
+    for i in range(length):
+        item = arr.elements[i] if i < len(arr.elements) else UNDEFINED
         val = interp.call_function(callback, [item, JSNumber(i), arr])
         if is_truthy(val):
             result.append(item)
@@ -163,10 +169,10 @@ def array_reduce(interp, args, this_val):
             raise TypeError("Reduce of empty array with no initial value")
         acc = arr.elements[0]
         start = 1
-    for i in range(start, len(arr.elements)):
-        acc = interp.call_function(
-            callback, [acc, arr.elements[i], JSNumber(i), arr]
-        )
+    length = len(arr.elements)
+    for i in range(start, length):
+        item = arr.elements[i] if i < len(arr.elements) else UNDEFINED
+        acc = interp.call_function(callback, [acc, item, JSNumber(i), arr])
     return acc
 
 
@@ -251,6 +257,66 @@ def string_trim(interp, args, this_val):
     return JSString(s.strip())
 
 
+def string_indexOf(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    search = _js_str(args[0]) if args else "undefined"
+    start = int(_js_num(args[1])) if len(args) > 1 else 0
+    return JSNumber(s.find(search, max(0, start)))
+
+
+def string_lastIndexOf(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    search = _js_str(args[0]) if args else "undefined"
+    start = int(_js_num(args[1])) if len(args) > 1 else len(s)
+    return JSNumber(s.rfind(search, 0, min(len(s), start) + 1))
+
+
+def string_charAt(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    idx = int(_js_num(args[0])) if args else 0
+    if 0 <= idx < len(s):
+        return JSString(s[idx])
+    return JSString("")
+
+
+def string_charCodeAt(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    idx = int(_js_num(args[0])) if args else 0
+    if 0 <= idx < len(s):
+        return JSNumber(ord(s[idx]))
+    return JSNumber(float("nan"))
+
+
+def string_repeat(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    count = int(_js_num(args[0])) if args else 0
+    if count < 0:
+        raise ValueError("Invalid count value")
+    return JSString(s * count)
+
+
+def string_padStart(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    target = int(_js_num(args[0])) if args else 0
+    fill = _js_str(args[1]) if len(args) > 1 else " "
+    return JSString(_pad_string(s, target, fill, True))
+
+
+def string_padEnd(interp, args, this_val):
+    s = _this_string(args, this_val).value
+    target = int(_js_num(args[0])) if args else 0
+    fill = _js_str(args[1]) if len(args) > 1 else " "
+    return JSString(_pad_string(s, target, fill, False))
+
+
+def _pad_string(s: str, target: int, fill: str, at_start: bool) -> str:
+    if target <= len(s) or fill == "":
+        return s
+    needed = target - len(s)
+    repeated = (fill * ((needed // len(fill)) + 1))[:needed]
+    return repeated + s if at_start else s + repeated
+
+
 def string_toUpperCase(interp, args, this_val):
     s = _this_string(args, this_val).value
     return JSString(s.upper())
@@ -310,7 +376,7 @@ def math_random(args):
 
 def date_constructor(interp, args):
     if not args:
-        ts = datetime.utcnow().timestamp() * 1000
+        ts = datetime.now(timezone.utc).timestamp() * 1000
     elif len(args) == 1:
         val = args[0]
         if isinstance(val, JSString):
@@ -336,7 +402,7 @@ def date_get_time(interp, this_val, args):
 
 
 def date_now(args):
-    return JSNumber(datetime.utcnow().timestamp() * 1000)
+    return JSNumber(datetime.now(timezone.utc).timestamp() * 1000)
 
 
 # --- Type constructors ---
@@ -388,6 +454,13 @@ def make_string_proto(interp: "Interpreter") -> JSObject:
         "substring": string_substring,
         "replace": string_replace,
         "includes": string_includes,
+        "indexOf": string_indexOf,
+        "lastIndexOf": string_lastIndexOf,
+        "charAt": string_charAt,
+        "charCodeAt": string_charCodeAt,
+        "repeat": string_repeat,
+        "padStart": string_padStart,
+        "padEnd": string_padEnd,
         "startsWith": string_startsWith,
         "endsWith": string_endsWith,
         "trim": string_trim,
@@ -426,10 +499,13 @@ def create_global_builtins(interp: "Interpreter") -> dict:
         "now": JSNativeFunction("now", lambda interp, a: date_now(a)),
     })
 
+    date_fn = JSNativeFunction("Date", lambda interp, a: date_constructor(interp, a))
+    date_fn.properties["now"] = JSNativeFunction("now", lambda interp, a: date_now(a))
+
     return {
         "console": console,
         "Math": math_obj,
-        "Date": JSNativeFunction("Date", lambda interp, a: date_constructor(interp, a)),
+        "Date": date_fn,
         "String": JSNativeFunction("String", lambda interp, a: js_string_ctor(a)),
         "Number": JSNativeFunction("Number", lambda interp, a: js_number_ctor(a)),
         "Boolean": JSNativeFunction("Boolean", lambda interp, a: js_boolean_ctor(a)),
