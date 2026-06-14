@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -258,6 +258,7 @@ class JSNativeFunction(JSValue):
         self.name = name
         self.fn = fn
         self.this_binding = this_binding
+        self.properties: Dict[str, Any] = {}
 
     def to_js_string(self) -> str:
         return f"[Function: {self.name}]"
@@ -279,7 +280,7 @@ class JSDate(JSValue):
         self.timestamp_ms = timestamp_ms
 
     def to_js_string(self) -> str:
-        dt = datetime.utcfromtimestamp(self.timestamp_ms / 1000.0)
+        dt = datetime.fromtimestamp(self.timestamp_ms / 1000.0, timezone.utc)
         days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

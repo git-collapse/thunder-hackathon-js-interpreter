@@ -28,7 +28,7 @@ class VariableDeclaration(Node):
 
 @dataclass(kw_only=True)
 class VariableDeclarator(Node):
-    id: "Identifier"
+    id: Node
     init: Optional[Node] = None
 
 
@@ -112,6 +112,66 @@ class ForStatement(Node):
 
 
 @dataclass(kw_only=True)
+class ForInOfStatement(Node):
+    left: Node
+    right: Node
+    body: Node
+    kind: str  # 'in' or 'of'
+
+
+@dataclass(kw_only=True)
+class BreakStatement(Node):
+    pass
+
+
+@dataclass(kw_only=True)
+class ContinueStatement(Node):
+    pass
+
+
+@dataclass(kw_only=True)
+class SwitchCase(Node):
+    test: Optional[Node]
+    consequent: List[Node] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
+class SwitchStatement(Node):
+    discriminant: Node
+    cases: List[SwitchCase] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
+class ConditionalExpression(Node):
+    test: Node
+    consequent: Node
+    alternate: Node
+
+
+@dataclass(kw_only=True)
+class ArrayPattern(Node):
+    elements: List[Optional[Node]] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
+class CatchClause(Node):
+    param: Optional[Node]
+    body: BlockStatement
+
+
+@dataclass(kw_only=True)
+class TryStatement(Node):
+    block: BlockStatement
+    handler: Optional[CatchClause] = None
+    finalizer: Optional[BlockStatement] = None
+
+
+@dataclass(kw_only=True)
+class ThrowStatement(Node):
+    argument: Node
+
+
+@dataclass(kw_only=True)
 class FunctionDeclaration(Node):
     id: Identifier
     params: List[Node]  # Identifier or RestElement
@@ -170,6 +230,11 @@ class Property(Node):
 @dataclass(kw_only=True)
 class SpreadElement(Node):
     argument: Node
+
+
+@dataclass(kw_only=True)
+class TemplateLiteral(Node):
+    parts: List[Any] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)

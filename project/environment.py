@@ -17,8 +17,9 @@ class Binding:
 class Environment:
     """Scope chain environment for variable lookup and assignment."""
 
-    def __init__(self, parent: Optional["Environment"] = None):
+    def __init__(self, parent: Optional["Environment"] = None, is_function_scope: bool = False):
         self.parent = parent
+        self.is_function_scope = is_function_scope
         self.bindings: Dict[str, Binding] = {}
 
     def define(self, name: str, value: Any, kind: str = "let") -> None:

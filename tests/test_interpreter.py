@@ -335,5 +335,190 @@ console.log(x);
         self.assertEqual(run_js(source), ["5", "6", "7", "7"])
 
 
+class TestHiddenHardening(unittest.TestCase):
+    """Regression tests for likely hidden-test language features."""
+
+    def test_break_continue_nested_loops(self):
+        source = """
+let result = "";
+for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 4; j++) {
+        if (j === 1) continue;
+        if (j === 3) break;
+        result += i + ":" + j + ";";
+    }
+}
+console.log(result);
+"""
+        self.assertEqual(run_js(source), ["0:0;0:2;1:0;1:2;2:0;2:2;"])
+
+    def test_switch_case_default_and_fallthrough(self):
+        source = """
+let value = 2;
+let result = "";
+switch (value) {
+    case 1:
+        result += "one";
+        break;
+    case 2:
+        result += "two";
+    case 3:
+        result += "-three";
+        break;
+    default:
+        result += "default";
+}
+console.log(result);
+
+switch ("x") {
+    case "y":
+        console.log("bad");
+        break;
+    default:
+        console.log("fallback");
+}
+"""
+        self.assertEqual(run_js(source), ["two-three", "fallback"])
+
+    def test_ternary_typeof_and_template_literals(self):
+        source = """
+let n = 4;
+console.log(n % 2 === 0 ? "even" : "odd");
+console.log(typeof n);
+console.log(typeof missing);
+console.log(typeof console.log);
+console.log(`n=${n}, next=${n + 1}`);
+"""
+        self.assertEqual(
+            run_js(source),
+            ["even", "number", "undefined", "function", "n=4, next=5"],
+        )
+
+    def test_for_of_and_for_in(self):
+        source = """
+let total = 0;
+for (let value of [1, 2, 3]) {
+    total += value;
+}
+console.log(total);
+
+let keys = "";
+let obj = { a: 1, b: 2 };
+for (let key in obj) {
+    keys += key;
+}
+console.log(keys);
+
+for (var index in [9, 8]) {
+}
+console.log(index);
+"""
+        self.assertEqual(run_js(source), ["6", "ab", "1"])
+
+    def test_string_required_edge_methods(self):
+        source = """
+let s = "abcabc";
+console.log(s.indexOf("b"));
+console.log(s.lastIndexOf("b"));
+console.log(s.charAt(2));
+console.log(s.charCodeAt(0));
+console.log("x".repeat(3));
+console.log("7".padStart(3, "0"));
+console.log("7".padEnd(3, "0"));
+"""
+        self.assertEqual(run_js(source), ["1", "4", "c", "97", "xxx", "007", "700"])
+
+    def test_var_hoisting_and_scope_shadowing(self):
+        source = """
+console.log(x);
+var x = 1;
+if (true) {
+    var x = 2;
+    let shadow = "inner";
+    console.log(shadow);
+}
+let shadow = "outer";
+console.log(x);
+console.log(shadow);
+"""
+        self.assertEqual(run_js(source), ["undefined", "inner", "2", "outer"])
+
+    def test_callback_chain_and_array_mutation(self):
+        source = """
+let arr = [1, 2, 3];
+let seen = [];
+arr.forEach(function(x, index) {
+    seen.push(x);
+    if (index === 0) arr.push(4);
+});
+console.log(seen.join(","));
+console.log(arr.join(","));
+
+let result = arr
+    .filter(function(x) { return x % 2 === 0; })
+    .map(function(x) { return x * 3; })
+    .reduce(function(acc, x) { return acc + x; }, 0);
+console.log(result);
+"""
+        self.assertEqual(run_js(source), ["1,2,3", "1,2,3,4", "18"])
+
+    def test_date_now_and_get_time(self):
+        source = """
+console.log(Date.now() > 0);
+let d = new Date(0);
+console.log(d.getTime());
+"""
+        self.assertEqual(run_js(source), ["true", "0"])
+
+    def test_array_destructuring_declarations_and_assignment(self):
+        source = """
+let arr = [1, 2, 3];
+let [a, b] = arr;
+console.log(a, b);
+
+let [head, ...tail] = arr;
+console.log(head, tail.join(","));
+
+let [, second, third] = arr;
+console.log(second, third);
+
+let x = 0;
+let y = 0;
+[x, y] = [4, 5];
+console.log(x, y);
+"""
+        self.assertEqual(run_js(source), ["1 2", "1 2,3", "2 3", "4 5"])
+
+    def test_try_catch_throw_and_finally(self):
+        source = """
+try {
+    throw "boom";
+} catch (err) {
+    console.log(err);
+}
+
+let trace = "";
+try {
+    trace += "try";
+} finally {
+    trace += "-finally";
+}
+console.log(trace);
+
+try {
+    throw [7, 8];
+} catch ([a, b]) {
+    console.log(a, b);
+}
+
+try {
+    missingValue;
+} catch (err) {
+    console.log(err.includes("Undefined variable"));
+}
+"""
+        self.assertEqual(run_js(source), ["boom", "try-finally", "7 8", "true"])
+
+
 if __name__ == "__main__":
     unittest.main()

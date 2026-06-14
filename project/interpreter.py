@@ -8,10 +8,17 @@ from typing import Any, List, Optional
 from project import ast_nodes as ast
 from project.builtins import create_global_builtins
 from project.environment import Environment
-from project.errors import ReturnSignal, RuntimeError as JSRuntimeError
+from project.errors import (
+    BreakSignal,
+    ContinueSignal,
+    ReturnSignal,
+    ThrowSignal,
+    RuntimeError as JSRuntimeError,
+)
 from project.runtime import (
     JSArray,
     JSBoolean,
+    JSDate,
     JSFunction,
     JSNativeFunction,
     JSNull,
@@ -33,7 +40,7 @@ class Interpreter:
     """Evaluate JavaScript AST nodes."""
 
     def __init__(self):
-        self.global_env = Environment()
+        self.global_env = Environment(is_function_scope=True)
         self.env = self.global_env
         self.output: List[str] = []
         self._builtins = create_global_builtins(self)
@@ -43,23 +50,52 @@ class Interpreter:
 
     def run(self, program: ast.Program) -> List[str]:
         self.output = []
-        self._hoist_functions(program.body, self.global_env)
-        self._execute_block(program.body, self.global_env)
+        self._hoist_declarations(program.body, self.global_env)
+        try:
+            self._execute_block(program.body, self.global_env)
+        except ThrowSignal as thrown:
+            raise JSRuntimeError(f"Uncaught {to_string(thrown.value)}")
         return self.output
 
-    def _hoist_functions(self, statements: List[ast.Node], env: Environment):
-        """Hoist function declarations to the top of scope."""
+    def _hoist_declarations(self, statements: List[ast.Node], env: Environment):
         for stmt in statements:
             if isinstance(stmt, ast.FunctionDeclaration):
                 self.env = env
                 self._eval_function_declaration(stmt)
+            elif isinstance(stmt, ast.VariableDeclaration) and stmt.kind == "var":
+                for decl in stmt.declarations:
+                    for name in self._pattern_names(decl.id):
+                        if not env.has_local(name):
+                            env.define(name, UNDEFINED, "var")
             elif isinstance(stmt, ast.BlockStatement):
-                self._hoist_functions(stmt.body, env)
+                self._hoist_declarations(stmt.body, env)
             elif isinstance(stmt, ast.IfStatement):
                 if isinstance(stmt.consequent, ast.BlockStatement):
-                    self._hoist_functions(stmt.consequent.body, env)
+                    self._hoist_declarations(stmt.consequent.body, env)
                 if stmt.alternate and isinstance(stmt.alternate, ast.BlockStatement):
-                    self._hoist_functions(stmt.alternate.body, env)
+                    self._hoist_declarations(stmt.alternate.body, env)
+            elif isinstance(stmt, ast.ForStatement):
+                if isinstance(stmt.init, ast.VariableDeclaration) and stmt.init.kind == "var":
+                    for decl in stmt.init.declarations:
+                        for name in self._pattern_names(decl.id):
+                            if not env.has_local(name):
+                                env.define(name, UNDEFINED, "var")
+                if isinstance(stmt.body, ast.BlockStatement):
+                    self._hoist_declarations(stmt.body.body, env)
+            elif isinstance(stmt, ast.ForInOfStatement):
+                if isinstance(stmt.left, ast.VariableDeclaration) and stmt.left.kind == "var":
+                    for decl in stmt.left.declarations:
+                        for name in self._pattern_names(decl.id):
+                            if not env.has_local(name):
+                                env.define(name, UNDEFINED, "var")
+                if isinstance(stmt.body, ast.BlockStatement):
+                    self._hoist_declarations(stmt.body.body, env)
+            elif isinstance(stmt, ast.WhileStatement):
+                if isinstance(stmt.body, ast.BlockStatement):
+                    self._hoist_declarations(stmt.body.body, env)
+            elif isinstance(stmt, ast.SwitchStatement):
+                for case in stmt.cases:
+                    self._hoist_declarations(case.consequent, env)
 
     def _execute_block(self, statements: List[ast.Node], env: Environment):
         prev = self.env
@@ -96,8 +132,26 @@ class Interpreter:
         if isinstance(node, ast.ForStatement):
             return self._eval_for(node)
 
+        if isinstance(node, ast.ForInOfStatement):
+            return self._eval_for_in_of(node)
+
+        if isinstance(node, ast.SwitchStatement):
+            return self._eval_switch(node)
+
+        if isinstance(node, ast.TryStatement):
+            return self._eval_try(node)
+
         if isinstance(node, ast.FunctionDeclaration):
             return self._eval_function_declaration(node)
+
+        if isinstance(node, ast.BreakStatement):
+            raise BreakSignal()
+
+        if isinstance(node, ast.ContinueStatement):
+            raise ContinueSignal()
+
+        if isinstance(node, ast.ThrowStatement):
+            raise ThrowSignal(self._evaluate(node.argument))
 
         if isinstance(node, ast.ReturnStatement):
             val = UNDEFINED
@@ -115,31 +169,99 @@ class Interpreter:
             value = UNDEFINED
             if decl.init:
                 value = self._evaluate(decl.init)
-            name = decl.id.name
-            if node.kind == "var":
-                self._define_var(name, value)
-            else:
-                if self.env.has_local(name):
-                    raise JSRuntimeError(f"Identifier '{name}' has already been declared")
-                self.env.define(name, value, node.kind)
+            self._bind_pattern(decl.id, value, node.kind)
         return UNDEFINED
 
+    def _pattern_names(self, pattern: ast.Node) -> List[str]:
+        if isinstance(pattern, ast.Identifier):
+            return [pattern.name]
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            names = []
+            for element in pattern.elements:
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    names.extend(self._pattern_names(element.argument))
+                else:
+                    names.extend(self._pattern_names(element))
+            return names
+        if isinstance(pattern, ast.RestElement):
+            return self._pattern_names(pattern.argument)
+        return []
+
+    def _bind_pattern(self, pattern: ast.Node, value: Any, kind: Optional[str] = None):
+        if isinstance(pattern, ast.Identifier):
+            self._bind_identifier(pattern.name, value, kind)
+            return
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            values = self._destructure_values(value)
+            for index, element in enumerate(pattern.elements):
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    self._bind_pattern(element.argument, JSArray(values[index:]), kind)
+                    return
+                self._bind_pattern(
+                    element,
+                    values[index] if index < len(values) else UNDEFINED,
+                    kind,
+                )
+            return
+        raise JSRuntimeError("Invalid destructuring target")
+
+    def _rebind_pattern(self, pattern: ast.Node, value: Any, kind: Optional[str] = None):
+        if isinstance(pattern, ast.Identifier):
+            if kind == "var":
+                self._define_var(pattern.name, value)
+            elif self.env.has_local(pattern.name):
+                self.env.bindings[pattern.name].value = value
+            else:
+                self._bind_identifier(pattern.name, value, kind)
+            return
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            values = self._destructure_values(value)
+            for index, element in enumerate(pattern.elements):
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    self._rebind_pattern(element.argument, JSArray(values[index:]), kind)
+                    return
+                self._rebind_pattern(
+                    element,
+                    values[index] if index < len(values) else UNDEFINED,
+                    kind,
+                )
+            return
+        raise JSRuntimeError("Invalid destructuring target")
+
+    def _bind_identifier(self, name: str, value: Any, kind: Optional[str]):
+        if kind == "var":
+            self._define_var(name, value)
+            return
+        if kind in ("let", "const"):
+            if self.env.has_local(name):
+                raise JSRuntimeError(f"Identifier '{name}' has already been declared")
+            self.env.define(name, value, kind)
+            return
+        self._assign(name, value)
+
+    def _destructure_values(self, value: Any) -> List[Any]:
+        if isinstance(value, JSArray):
+            return list(value.elements)
+        if isinstance(value, JSString):
+            return [JSString(ch) for ch in value.value]
+        if value is UNDEFINED or isinstance(value, JSNull):
+            raise JSRuntimeError("Cannot destructure null or undefined")
+        raise JSRuntimeError("Value is not iterable")
+
     def _define_var(self, name: str, value: Any):
-        """var declarations go to nearest function scope or global."""
         env = self.env
-        while env.parent and env.parent.parent:
-            # stop at function boundary - for simplicity use global if no function scope marker
+        while env.parent and not env.is_function_scope:
             env = env.parent
-        # Walk up until we find existing binding or hit global
-        check = self.env
-        while check:
-            if check.has_local(name):
-                check.bindings[name].value = value
-                return
-            if check.parent is None:
-                break
-            check = check.parent
-        self.env.define(name, value, "var")
+        if env.has_local(name):
+            env.bindings[name].value = value
+        else:
+            env.define(name, value, "var")
 
     def _eval_function_declaration(self, node: ast.FunctionDeclaration):
         fn = JSFunction(
@@ -165,7 +287,12 @@ class Interpreter:
     def _eval_while(self, node: ast.WhileStatement):
         result = UNDEFINED
         while is_truthy(self._evaluate(node.test)):
-            result = self._execute(node.body)
+            try:
+                result = self._execute(node.body)
+            except ContinueSignal:
+                continue
+            except BreakSignal:
+                break
         return result
 
     def _eval_for(self, node: ast.ForStatement):
@@ -181,12 +308,118 @@ class Interpreter:
             while True:
                 if node.test and not is_truthy(self._evaluate(node.test)):
                     break
-                self._execute(node.body)
+                try:
+                    self._execute(node.body)
+                except ContinueSignal:
+                    pass
+                except BreakSignal:
+                    break
                 if node.update:
                     self._evaluate(node.update)
         finally:
             self.env = prev
         return UNDEFINED
+
+    def _eval_for_in_of(self, node: ast.ForInOfStatement):
+        values = self._iteration_values(self._evaluate(node.right), node.kind)
+        loop_env = Environment(self.env)
+        prev = self.env
+        self.env = loop_env
+        try:
+            for value in values:
+                self._bind_iteration_target(node.left, value)
+                try:
+                    self._execute(node.body)
+                except ContinueSignal:
+                    continue
+                except BreakSignal:
+                    break
+        finally:
+            self.env = prev
+        return UNDEFINED
+
+    def _iteration_values(self, value: Any, kind: str) -> List[Any]:
+        if kind == "of":
+            if isinstance(value, JSArray):
+                return list(value.elements)
+            if isinstance(value, JSString):
+                return [JSString(ch) for ch in value.value]
+            raise JSRuntimeError("Value is not iterable")
+        if kind == "in":
+            if isinstance(value, JSArray):
+                return [JSString(str(i)) for i in range(len(value.elements))]
+            if isinstance(value, JSString):
+                return [JSString(str(i)) for i in range(len(value.value))]
+            if isinstance(value, JSObject):
+                return [JSString(k) for k in value.properties.keys()]
+            raise JSRuntimeError("Cannot iterate properties of value")
+        raise JSRuntimeError(f"Unknown for-loop kind: {kind}")
+
+    def _bind_iteration_target(self, target: ast.Node, value: Any):
+        if isinstance(target, ast.VariableDeclaration):
+            decl = target.declarations[0]
+            self._rebind_pattern(decl.id, value, target.kind)
+            return
+        if isinstance(target, ast.Identifier):
+            self._assign(target.name, value)
+            return
+        if isinstance(target, ast.MemberExpression):
+            obj = self._evaluate(target.object)
+            key = self._member_key(target)
+            self._set_property(obj, key, value)
+            return
+        raise JSRuntimeError("Invalid for-loop target")
+
+    def _eval_switch(self, node: ast.SwitchStatement):
+        discriminant = self._evaluate(node.discriminant)
+        start_index = None
+        default_index = None
+        for i, case in enumerate(node.cases):
+            if case.test is None:
+                default_index = i
+            elif strict_equal(discriminant, self._evaluate(case.test)):
+                start_index = i
+                break
+        if start_index is None:
+            start_index = default_index
+        if start_index is None:
+            return UNDEFINED
+        try:
+            for case in node.cases[start_index:]:
+                for stmt in case.consequent:
+                    self._execute(stmt)
+        except BreakSignal:
+            return UNDEFINED
+        return UNDEFINED
+
+    def _eval_try(self, node: ast.TryStatement):
+        result = UNDEFINED
+        try:
+            result = self._execute(node.block)
+        except ThrowSignal as thrown:
+            if node.handler is None:
+                raise
+            result = self._eval_catch(node.handler, thrown.value)
+        except (JSRuntimeError, RuntimeError) as error:
+            if node.handler is None:
+                raise
+            message = getattr(error, "message", str(error))
+            result = self._eval_catch(node.handler, JSString(message))
+        finally:
+            if node.finalizer:
+                self._execute(node.finalizer)
+        return result
+
+    def _eval_catch(self, handler: ast.CatchClause, value: Any):
+        catch_env = Environment(self.env)
+        prev = self.env
+        self.env = catch_env
+        try:
+            if handler.param:
+                self._bind_pattern(handler.param, value, "let")
+            return self._execute_block(handler.body.body, catch_env)
+        finally:
+            self.env = prev
 
     def _evaluate(self, node: ast.Node) -> Any:
         if node is None:
@@ -210,6 +443,11 @@ class Interpreter:
         if isinstance(node, ast.AssignmentExpression):
             return self._eval_assignment(node)
 
+        if isinstance(node, ast.ConditionalExpression):
+            if is_truthy(self._evaluate(node.test)):
+                return self._evaluate(node.consequent)
+            return self._evaluate(node.alternate)
+
         if isinstance(node, ast.UpdateExpression):
             return self._eval_update(node)
 
@@ -224,6 +462,9 @@ class Interpreter:
 
         if isinstance(node, ast.ObjectExpression):
             return self._eval_object(node)
+
+        if isinstance(node, ast.TemplateLiteral):
+            return self._eval_template_literal(node)
 
         if isinstance(node, ast.FunctionExpression):
             return JSFunction(
@@ -333,6 +574,8 @@ class Interpreter:
         return 0
 
     def _eval_unary(self, node: ast.UnaryExpression) -> Any:
+        if node.operator == "typeof":
+            return JSString(self._typeof(node.argument))
         arg = self._evaluate(node.argument)
         if node.operator == "!":
             return JSBoolean(not is_truthy(arg))
@@ -341,6 +584,24 @@ class Interpreter:
         if node.operator == "+":
             return JSNumber(to_number(arg))
         raise JSRuntimeError(f"Unknown unary operator: {node.operator}")
+
+    def _typeof(self, argument: ast.Node) -> str:
+        if isinstance(argument, ast.Identifier) and self.env.resolve_binding(argument.name) is None:
+            return "undefined"
+        value = self._evaluate(argument)
+        if value is UNDEFINED:
+            return "undefined"
+        if isinstance(value, JSBoolean):
+            return "boolean"
+        if isinstance(value, JSNumber):
+            return "number"
+        if isinstance(value, JSString):
+            return "string"
+        if isinstance(value, (JSFunction, JSNativeFunction)):
+            return "function"
+        if isinstance(value, (JSNull, JSObject, JSArray, JSDate)):
+            return "object"
+        return "undefined"
 
     def _eval_logical(self, node: ast.LogicalExpression) -> Any:
         if node.operator == "||":
@@ -378,6 +639,12 @@ class Interpreter:
             new_val = self._compound_assign(current, node.operator, right_val)
             self._set_property(obj, key, new_val)
             return new_val
+
+        if isinstance(node.left, (ast.ArrayExpression, ast.ArrayPattern)):
+            if node.operator != "=":
+                raise JSRuntimeError("Invalid destructuring assignment operator")
+            self._bind_pattern(node.left, right_val)
+            return right_val
 
         raise JSRuntimeError("Invalid assignment target")
 
@@ -454,6 +721,8 @@ class Interpreter:
                     return bound
         if isinstance(obj, JSObject):
             return obj.get(key)
+        if isinstance(obj, JSNativeFunction) and key in obj.properties:
+            return obj.properties[key]
         if isinstance(obj, JSDate):
             if key == "getTime":
                 from project.builtins import date_get_time
@@ -488,6 +757,15 @@ class Interpreter:
                 obj[idx] = value
                 return
         raise JSRuntimeError(f"Cannot set property '{key}' on value")
+
+    def _eval_template_literal(self, node: ast.TemplateLiteral) -> JSString:
+        chunks = []
+        for part in node.parts:
+            if isinstance(part, str):
+                chunks.append(part)
+            else:
+                chunks.append(to_string(self._evaluate(part)))
+        return JSString("".join(chunks))
 
     def _parse_index(self, key: str) -> Optional[int]:
         try:
@@ -527,7 +805,7 @@ class Interpreter:
         raise JSRuntimeError(f"'{callee}' is not a function")
 
     def _call_js_function(self, fn: JSFunction, args: List[Any], this_val: Any = None) -> Any:
-        fn_env = Environment(fn.closure)
+        fn_env = Environment(fn.closure, is_function_scope=True)
 
         # Bind parameters
         rest_param = None
@@ -556,6 +834,7 @@ class Interpreter:
                 finally:
                     self.env = prev
             else:
+                self._hoist_declarations(fn.body.body, fn_env)
                 self._execute_block(fn.body.body, fn_env)
                 return UNDEFINED
         except ReturnSignal as rs:
