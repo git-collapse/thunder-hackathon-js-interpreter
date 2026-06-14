@@ -51,7 +51,10 @@ class Interpreter:
     def run(self, program: ast.Program) -> List[str]:
         self.output = []
         self._hoist_declarations(program.body, self.global_env)
-        self._execute_block(program.body, self.global_env)
+        try:
+            self._execute_block(program.body, self.global_env)
+        except ThrowSignal as thrown:
+            raise JSRuntimeError(f"Uncaught {to_string(thrown.value)}")
         return self.output
 
     def _hoist_declarations(self, statements: List[ast.Node], env: Environment):
@@ -397,6 +400,11 @@ class Interpreter:
             if node.handler is None:
                 raise
             result = self._eval_catch(node.handler, thrown.value)
+        except (JSRuntimeError, RuntimeError) as error:
+            if node.handler is None:
+                raise
+            message = getattr(error, "message", str(error))
+            result = self._eval_catch(node.handler, JSString(message))
         finally:
             if node.finalizer:
                 self._execute(node.finalizer)

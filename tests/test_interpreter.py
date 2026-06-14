@@ -510,8 +510,14 @@ try {
 } catch ([a, b]) {
     console.log(a, b);
 }
+
+try {
+    missingValue;
+} catch (err) {
+    console.log(err.includes("Undefined variable"));
+}
 """
-        self.assertEqual(run_js(source), ["boom", "try-finally", "7 8"])
+        self.assertEqual(run_js(source), ["boom", "try-finally", "7 8", "true"])
 
 
 if __name__ == "__main__":
