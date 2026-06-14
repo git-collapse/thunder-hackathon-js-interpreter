@@ -4,7 +4,7 @@
 
 ✅ Passes all 5 official Thunder Hackathon test cases
 
-✅ Passes 22 automated tests
+✅ Passes 32 automated tests
 
 ✅ Built without Node.js or external JavaScript runtime
 
@@ -245,7 +245,15 @@ Output
 
 Successfully passed all automated tests.
 
-Ran 22 tests in 0.036s
+Ran 32 tests in 0.071s
 
 OK
- <img width="1600" height="867" alt="WhatsApp Image 2026-06-14 at 9 41 03 AM" src="https://github.com/user-attachments/assets/0ddb8bcb-4b16-4fe7-808c-9248925c5a78" />
+<img width="1600" height="1200" alt="WhatsApp Image 2026-06-14 at 6 03 57 PM" src="https://github.com/user-attachments/assets/4318b13a-1986-4b5f-9550-cd745dd65412" />
+## Additional Language Features
+
+- try / catch / throw
+- typeof operator
+- ternary operator
+- array destructuring
+- enhanced string methods
+- hidden-test coverage improvements
