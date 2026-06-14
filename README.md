@@ -1,5 +1,22 @@
 # PyJS — Build Your Own JavaScript
 
+## Achievements
+
+✅ Passes all 5 official Thunder Hackathon test cases
+
+✅ Passes 22 automated tests
+
+✅ Built without Node.js or external JavaScript runtime
+
+✅ Custom Lexer
+
+✅ Custom Parser
+
+✅ AST-based Interpreter
+
+✅ Supports Variables, Functions, Loops, Arrays, Objects and Callbacks
+
+
 A from-scratch JavaScript interpreter written in **Python** for Thunder Hackathon 2.0.
 
 PyJS accepts JavaScript source code, tokenizes it, builds an AST, and executes it using a tree-walking interpreter — **no Node.js, no subprocess, no external JS runtime**.
@@ -190,3 +207,37 @@ examples/
 ## License
 
 Built for Thunder Hackathon 2.0.
+
+## Design Highlights
+
+Execution Flow:
+
+JavaScript Source
+↓
+Lexer
+↓
+Parser
+↓
+AST Generation
+↓
+Interpreter
+↓
+Output
+
+## Hackathon Test Coverage
+
+- Odd / Even Checker
+- Triangle Pattern
+- Armstrong Number
+- Array Reverse
+- String Palindrome
+- Array Methods
+- String Methods
+- Objects
+- Recursion
+- Arrow Functions
+- Callback Functions
+- Spread / Rest Operators
+- Type Conversion
+- Math Utilities
+- 
