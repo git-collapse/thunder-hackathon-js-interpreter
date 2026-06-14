@@ -240,4 +240,12 @@ Output
 - Spread / Rest Operators
 - Type Conversion
 - Math Utilities
-- 
+
+- ## Test Results
+
+Successfully passed all automated tests.
+
+Ran 22 tests in 0.036s
+
+OK
+ <img width="1600" height="867" alt="WhatsApp Image 2026-06-14 at 9 41 03 AM" src="https://github.com/user-attachments/assets/0ddb8bcb-4b16-4fe7-808c-9248925c5a78" />
