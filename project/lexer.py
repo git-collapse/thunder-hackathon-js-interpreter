@@ -24,6 +24,10 @@ class TokenType(Enum):
     SWITCH = auto()
     CASE = auto()
     DEFAULT = auto()
+    TRY = auto()
+    CATCH = auto()
+    FINALLY = auto()
+    THROW = auto()
     TYPEOF = auto()
     OF = auto()
     IN = auto()
@@ -102,6 +106,10 @@ KEYWORDS = {
     "switch": TokenType.SWITCH,
     "case": TokenType.CASE,
     "default": TokenType.DEFAULT,
+    "try": TokenType.TRY,
+    "catch": TokenType.CATCH,
+    "finally": TokenType.FINALLY,
+    "throw": TokenType.THROW,
     "typeof": TokenType.TYPEOF,
     "of": TokenType.OF,
     "in": TokenType.IN,

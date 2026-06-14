@@ -4,12 +4,14 @@ from typing import List, Optional
 
 from project.ast_nodes import (
     ArrayExpression,
+    ArrayPattern,
     ArrowFunctionExpression,
     AssignmentExpression,
     BinaryExpression,
     BlockStatement,
     BreakStatement,
     CallExpression,
+    CatchClause,
     ConditionalExpression,
     ContinueStatement,
     EmptyStatement,
@@ -32,6 +34,8 @@ from project.ast_nodes import (
     SwitchCase,
     SwitchStatement,
     TemplateLiteral,
+    ThrowStatement,
+    TryStatement,
     UnaryExpression,
     UpdateExpression,
     VariableDeclaration,
@@ -100,6 +104,10 @@ class Parser:
             return self._parse_for_statement()
         if self._match(TokenType.SWITCH):
             return self._parse_switch_statement()
+        if self._match(TokenType.TRY):
+            return self._parse_try_statement()
+        if self._match(TokenType.THROW):
+            return self._parse_throw_statement()
         if self._match(TokenType.BREAK):
             self._match(TokenType.SEMICOLON)
             return BreakStatement()
@@ -139,15 +147,37 @@ class Parser:
         return VariableDeclaration(kind=kind, declarations=declarations)
 
     def _parse_variable_declarator(self) -> VariableDeclarator:
-        if self._check(TokenType.IDENTIFIER):
-            id_node = Identifier(name=self._advance().value)
-        else:
-            raise ParserError("Expected identifier in variable declaration",
-                              self._current().line, self._current().column)
+        id_node = self._parse_binding_pattern()
         init = None
         if self._match(TokenType.EQ):
             init = self._parse_assignment_expression()
         return VariableDeclarator(id=id_node, init=init)
+
+    def _parse_binding_pattern(self):
+        if self._check(TokenType.IDENTIFIER):
+            return Identifier(name=self._advance().value)
+        if self._match(TokenType.LBRACKET):
+            return self._parse_array_pattern_after_lbracket()
+        raise ParserError(
+            "Expected binding identifier or pattern",
+            self._current().line,
+            self._current().column,
+        )
+
+    def _parse_array_pattern_after_lbracket(self) -> ArrayPattern:
+        elements = []
+        while not self._check(TokenType.RBRACKET) and not self._is_at_end():
+            if self._match(TokenType.COMMA):
+                elements.append(None)
+                continue
+            if self._match(TokenType.SPREAD):
+                elements.append(RestElement(argument=self._parse_binding_pattern()))
+            else:
+                elements.append(self._parse_binding_pattern())
+            if not self._match(TokenType.COMMA):
+                break
+        self._expect(TokenType.RBRACKET, "Expected ']' after array pattern")
+        return ArrayPattern(elements=elements)
 
     def _parse_function_declaration(self) -> FunctionDeclaration:
         name = Identifier(name=self._expect(TokenType.IDENTIFIER, "Expected function name").value)
@@ -193,7 +223,7 @@ class Parser:
         init = None
         if self._check(TokenType.LET, TokenType.CONST, TokenType.VAR):
             kind = self._advance().value
-            ident = Identifier(name=self._expect(TokenType.IDENTIFIER, "Expected loop variable").value)
+            pattern = self._parse_binding_pattern()
             if self._match(TokenType.OF, TokenType.IN):
                 op = self.tokens[self.pos - 1].value
                 right = self._parse_expression()
@@ -201,12 +231,12 @@ class Parser:
                 body = self._parse_statement()
                 decl = VariableDeclaration(
                     kind=kind,
-                    declarations=[VariableDeclarator(id=ident, init=None)],
+                    declarations=[VariableDeclarator(id=pattern, init=None)],
                 )
                 return ForInOfStatement(left=decl, right=right, body=body, kind=op)
             init = VariableDeclaration(
                 kind=kind,
-                declarations=[self._parse_variable_declarator_after_id(ident)],
+                declarations=[self._parse_variable_declarator_after_binding(pattern)],
             )
             while self._match(TokenType.COMMA):
                 init.declarations.append(self._parse_variable_declarator())
@@ -236,7 +266,7 @@ class Parser:
         body = self._parse_statement()
         return ForStatement(init=init, test=test, update=update, body=body)
 
-    def _parse_variable_declarator_after_id(self, id_node: Identifier) -> VariableDeclarator:
+    def _parse_variable_declarator_after_binding(self, id_node) -> VariableDeclarator:
         init = None
         if self._match(TokenType.EQ):
             init = self._parse_assignment_expression()
@@ -266,6 +296,29 @@ class Parser:
             cases.append(SwitchCase(test=test, consequent=consequent))
         self._expect(TokenType.RBRACE, "Expected '}' after switch body")
         return SwitchStatement(discriminant=discriminant, cases=cases)
+
+    def _parse_try_statement(self) -> TryStatement:
+        block = self._parse_block_statement()
+        handler = None
+        finalizer = None
+        if self._match(TokenType.CATCH):
+            param = None
+            if self._match(TokenType.LPAREN):
+                param = self._parse_binding_pattern()
+                self._expect(TokenType.RPAREN, "Expected ')' after catch parameter")
+            handler = CatchClause(param=param, body=self._parse_block_statement())
+        if self._match(TokenType.FINALLY):
+            finalizer = self._parse_block_statement()
+        if handler is None and finalizer is None:
+            raise ParserError("Missing catch or finally after try", self._current().line, self._current().column)
+        return TryStatement(block=block, handler=handler, finalizer=finalizer)
+
+    def _parse_throw_statement(self) -> ThrowStatement:
+        if self._check(TokenType.SEMICOLON, TokenType.RBRACE) or self._is_at_end():
+            raise ParserError("Expected expression after 'throw'", self._current().line, self._current().column)
+        argument = self._parse_expression()
+        self._match(TokenType.SEMICOLON)
+        return ThrowStatement(argument=argument)
 
     def _parse_return_statement(self) -> ReturnStatement:
         argument = None

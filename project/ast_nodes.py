@@ -28,7 +28,7 @@ class VariableDeclaration(Node):
 
 @dataclass(kw_only=True)
 class VariableDeclarator(Node):
-    id: "Identifier"
+    id: Node
     init: Optional[Node] = None
 
 
@@ -146,6 +146,29 @@ class ConditionalExpression(Node):
     test: Node
     consequent: Node
     alternate: Node
+
+
+@dataclass(kw_only=True)
+class ArrayPattern(Node):
+    elements: List[Optional[Node]] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
+class CatchClause(Node):
+    param: Optional[Node]
+    body: BlockStatement
+
+
+@dataclass(kw_only=True)
+class TryStatement(Node):
+    block: BlockStatement
+    handler: Optional[CatchClause] = None
+    finalizer: Optional[BlockStatement] = None
+
+
+@dataclass(kw_only=True)
+class ThrowStatement(Node):
+    argument: Node
 
 
 @dataclass(kw_only=True)

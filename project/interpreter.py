@@ -12,6 +12,7 @@ from project.errors import (
     BreakSignal,
     ContinueSignal,
     ReturnSignal,
+    ThrowSignal,
     RuntimeError as JSRuntimeError,
 )
 from project.runtime import (
@@ -60,8 +61,9 @@ class Interpreter:
                 self._eval_function_declaration(stmt)
             elif isinstance(stmt, ast.VariableDeclaration) and stmt.kind == "var":
                 for decl in stmt.declarations:
-                    if not env.has_local(decl.id.name):
-                        env.define(decl.id.name, UNDEFINED, "var")
+                    for name in self._pattern_names(decl.id):
+                        if not env.has_local(name):
+                            env.define(name, UNDEFINED, "var")
             elif isinstance(stmt, ast.BlockStatement):
                 self._hoist_declarations(stmt.body, env)
             elif isinstance(stmt, ast.IfStatement):
@@ -72,15 +74,17 @@ class Interpreter:
             elif isinstance(stmt, ast.ForStatement):
                 if isinstance(stmt.init, ast.VariableDeclaration) and stmt.init.kind == "var":
                     for decl in stmt.init.declarations:
-                        if not env.has_local(decl.id.name):
-                            env.define(decl.id.name, UNDEFINED, "var")
+                        for name in self._pattern_names(decl.id):
+                            if not env.has_local(name):
+                                env.define(name, UNDEFINED, "var")
                 if isinstance(stmt.body, ast.BlockStatement):
                     self._hoist_declarations(stmt.body.body, env)
             elif isinstance(stmt, ast.ForInOfStatement):
                 if isinstance(stmt.left, ast.VariableDeclaration) and stmt.left.kind == "var":
                     for decl in stmt.left.declarations:
-                        if not env.has_local(decl.id.name):
-                            env.define(decl.id.name, UNDEFINED, "var")
+                        for name in self._pattern_names(decl.id):
+                            if not env.has_local(name):
+                                env.define(name, UNDEFINED, "var")
                 if isinstance(stmt.body, ast.BlockStatement):
                     self._hoist_declarations(stmt.body.body, env)
             elif isinstance(stmt, ast.WhileStatement):
@@ -131,6 +135,9 @@ class Interpreter:
         if isinstance(node, ast.SwitchStatement):
             return self._eval_switch(node)
 
+        if isinstance(node, ast.TryStatement):
+            return self._eval_try(node)
+
         if isinstance(node, ast.FunctionDeclaration):
             return self._eval_function_declaration(node)
 
@@ -139,6 +146,9 @@ class Interpreter:
 
         if isinstance(node, ast.ContinueStatement):
             raise ContinueSignal()
+
+        if isinstance(node, ast.ThrowStatement):
+            raise ThrowSignal(self._evaluate(node.argument))
 
         if isinstance(node, ast.ReturnStatement):
             val = UNDEFINED
@@ -156,14 +166,90 @@ class Interpreter:
             value = UNDEFINED
             if decl.init:
                 value = self._evaluate(decl.init)
-            name = decl.id.name
-            if node.kind == "var":
-                self._define_var(name, value)
-            else:
-                if self.env.has_local(name):
-                    raise JSRuntimeError(f"Identifier '{name}' has already been declared")
-                self.env.define(name, value, node.kind)
+            self._bind_pattern(decl.id, value, node.kind)
         return UNDEFINED
+
+    def _pattern_names(self, pattern: ast.Node) -> List[str]:
+        if isinstance(pattern, ast.Identifier):
+            return [pattern.name]
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            names = []
+            for element in pattern.elements:
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    names.extend(self._pattern_names(element.argument))
+                else:
+                    names.extend(self._pattern_names(element))
+            return names
+        if isinstance(pattern, ast.RestElement):
+            return self._pattern_names(pattern.argument)
+        return []
+
+    def _bind_pattern(self, pattern: ast.Node, value: Any, kind: Optional[str] = None):
+        if isinstance(pattern, ast.Identifier):
+            self._bind_identifier(pattern.name, value, kind)
+            return
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            values = self._destructure_values(value)
+            for index, element in enumerate(pattern.elements):
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    self._bind_pattern(element.argument, JSArray(values[index:]), kind)
+                    return
+                self._bind_pattern(
+                    element,
+                    values[index] if index < len(values) else UNDEFINED,
+                    kind,
+                )
+            return
+        raise JSRuntimeError("Invalid destructuring target")
+
+    def _rebind_pattern(self, pattern: ast.Node, value: Any, kind: Optional[str] = None):
+        if isinstance(pattern, ast.Identifier):
+            if kind == "var":
+                self._define_var(pattern.name, value)
+            elif self.env.has_local(pattern.name):
+                self.env.bindings[pattern.name].value = value
+            else:
+                self._bind_identifier(pattern.name, value, kind)
+            return
+        if isinstance(pattern, (ast.ArrayPattern, ast.ArrayExpression)):
+            values = self._destructure_values(value)
+            for index, element in enumerate(pattern.elements):
+                if element is None:
+                    continue
+                if isinstance(element, (ast.RestElement, ast.SpreadElement)):
+                    self._rebind_pattern(element.argument, JSArray(values[index:]), kind)
+                    return
+                self._rebind_pattern(
+                    element,
+                    values[index] if index < len(values) else UNDEFINED,
+                    kind,
+                )
+            return
+        raise JSRuntimeError("Invalid destructuring target")
+
+    def _bind_identifier(self, name: str, value: Any, kind: Optional[str]):
+        if kind == "var":
+            self._define_var(name, value)
+            return
+        if kind in ("let", "const"):
+            if self.env.has_local(name):
+                raise JSRuntimeError(f"Identifier '{name}' has already been declared")
+            self.env.define(name, value, kind)
+            return
+        self._assign(name, value)
+
+    def _destructure_values(self, value: Any) -> List[Any]:
+        if isinstance(value, JSArray):
+            return list(value.elements)
+        if isinstance(value, JSString):
+            return [JSString(ch) for ch in value.value]
+        if value is UNDEFINED or isinstance(value, JSNull):
+            raise JSRuntimeError("Cannot destructure null or undefined")
+        raise JSRuntimeError("Value is not iterable")
 
     def _define_var(self, name: str, value: Any):
         env = self.env
@@ -269,14 +355,7 @@ class Interpreter:
     def _bind_iteration_target(self, target: ast.Node, value: Any):
         if isinstance(target, ast.VariableDeclaration):
             decl = target.declarations[0]
-            name = decl.id.name
-            if target.kind == "var":
-                self._define_var(name, value)
-                return
-            if self.env.has_local(name):
-                self.env.bindings[name].value = value
-            else:
-                self.env.define(name, value, target.kind)
+            self._rebind_pattern(decl.id, value, target.kind)
             return
         if isinstance(target, ast.Identifier):
             self._assign(target.name, value)
@@ -309,6 +388,30 @@ class Interpreter:
         except BreakSignal:
             return UNDEFINED
         return UNDEFINED
+
+    def _eval_try(self, node: ast.TryStatement):
+        result = UNDEFINED
+        try:
+            result = self._execute(node.block)
+        except ThrowSignal as thrown:
+            if node.handler is None:
+                raise
+            result = self._eval_catch(node.handler, thrown.value)
+        finally:
+            if node.finalizer:
+                self._execute(node.finalizer)
+        return result
+
+    def _eval_catch(self, handler: ast.CatchClause, value: Any):
+        catch_env = Environment(self.env)
+        prev = self.env
+        self.env = catch_env
+        try:
+            if handler.param:
+                self._bind_pattern(handler.param, value, "let")
+            return self._execute_block(handler.body.body, catch_env)
+        finally:
+            self.env = prev
 
     def _evaluate(self, node: ast.Node) -> Any:
         if node is None:
@@ -528,6 +631,12 @@ class Interpreter:
             new_val = self._compound_assign(current, node.operator, right_val)
             self._set_property(obj, key, new_val)
             return new_val
+
+        if isinstance(node.left, (ast.ArrayExpression, ast.ArrayPattern)):
+            if node.operator != "=":
+                raise JSRuntimeError("Invalid destructuring assignment operator")
+            self._bind_pattern(node.left, right_val)
+            return right_val
 
         raise JSRuntimeError("Invalid assignment target")
 

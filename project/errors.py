@@ -41,3 +41,10 @@ class BreakSignal(Exception):
 
 class ContinueSignal(Exception):
     """Internal control flow for continue statements."""
+
+
+class ThrowSignal(Exception):
+    """Internal control flow for throw statements."""
+
+    def __init__(self, value):
+        self.value = value

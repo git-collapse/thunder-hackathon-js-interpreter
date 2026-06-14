@@ -470,6 +470,49 @@ console.log(d.getTime());
 """
         self.assertEqual(run_js(source), ["true", "0"])
 
+    def test_array_destructuring_declarations_and_assignment(self):
+        source = """
+let arr = [1, 2, 3];
+let [a, b] = arr;
+console.log(a, b);
+
+let [head, ...tail] = arr;
+console.log(head, tail.join(","));
+
+let [, second, third] = arr;
+console.log(second, third);
+
+let x = 0;
+let y = 0;
+[x, y] = [4, 5];
+console.log(x, y);
+"""
+        self.assertEqual(run_js(source), ["1 2", "1 2,3", "2 3", "4 5"])
+
+    def test_try_catch_throw_and_finally(self):
+        source = """
+try {
+    throw "boom";
+} catch (err) {
+    console.log(err);
+}
+
+let trace = "";
+try {
+    trace += "try";
+} finally {
+    trace += "-finally";
+}
+console.log(trace);
+
+try {
+    throw [7, 8];
+} catch ([a, b]) {
+    console.log(a, b);
+}
+"""
+        self.assertEqual(run_js(source), ["boom", "try-finally", "7 8"])
+
 
 if __name__ == "__main__":
     unittest.main()
